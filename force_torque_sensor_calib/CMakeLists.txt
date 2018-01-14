@@ -4,7 +4,7 @@ project(force_torque_sensor_calib)
 add_compile_options(-std=c++11)
 
 find_package(catkin REQUIRED COMPONENTS cmake_modules roscpp sensor_msgs tf geometry_msgs moveit_core moveit_ros_planning moveit_ros_planning_interface tf_conversions eigen_conversions)
-find_package(Eigen3)
+find_package(Eigen3 REQUIRED)
 if(NOT EIGEN3_FOUND)
   # Fallback to cmake_modules
   find_package(cmake_modules REQUIRED)
@@ -15,10 +15,10 @@ if(NOT EIGEN3_FOUND)
 else()
   set(EIGEN3_INCLUDE_DIRS ${EIGEN3_INCLUDE_DIR})
 endif()
-find_package(Boost REQUIRED system filesystem date_time thread)
+find_package(Boost REQUIRED system filesystem date_time thread QUIET)
 
 catkin_package(
-  DEPENDS eigen
+  DEPENDS EIGEN3
   CATKIN_DEPENDS roscpp sensor_msgs tf geometry_msgs moveit_core moveit_ros_planning moveit_ros_planning_interface eigen tf_conversions eigen_conversions
   INCLUDE_DIRS include 
   LIBRARIES 

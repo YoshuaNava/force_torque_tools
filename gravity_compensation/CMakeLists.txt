@@ -4,20 +4,20 @@ project(gravity_compensation)
 add_compile_options(-std=c++11)
 
 find_package(catkin REQUIRED COMPONENTS cmake_modules roscpp geometry_msgs sensor_msgs tf tf_conversions eigen_conversions)
-
-find_package(Boost REQUIRED COMPONENTS thread)
+find_package(Eigen3 REQUIRED)
+find_package(Boost REQUIRED COMPONENTS thread QUIET)
 
 catkin_package(
-  DEPENDS eigen
+  DEPENDS EIGEN3
   CATKIN_DEPENDS geometry_msgs sensor_msgs tf tf_conversions eigen_conversions
   INCLUDE_DIRS include 
   LIBRARIES gravity_compensation
 )
 
-include_directories(
-  include
+include_directories(include 
+  ${Boost_INCLUDE_DIR}
+  ${EIGEN3_INCLUDE_DIRS} 
   ${catkin_INCLUDE_DIRS}
-  ${Boost_INCLUDE_DIRS}
 )
 
 link_directories(${catkin_LIBRARY_DIRS})

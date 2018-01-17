@@ -52,29 +52,27 @@
 
 using namespace Calibration;
 
-#define PI 3.141592653589793238463
-
 
 class FTCalibNode
 {
 
 
 public:
-	ros::NodeHandle n_;
+	ros::NodeHandle nh_;
 	ros::AsyncSpinner *spinner;
 	ros::Subscriber topicSub_ft_raw_;
 	ros::Subscriber topicSub_Accelerometer_;
 
 	FTCalibNode()
 	{
-		n_ = ros::NodeHandle("~");
+		nh_ = ros::NodeHandle("~");
 		spinner = new ros::AsyncSpinner(1);
 		spinner->start();
 
 
 
-		topicSub_ft_raw_ = n_.subscribe("ft_raw", 1, &FTCalibNode::topicCallback_ft_raw, this);
-		topicSub_Accelerometer_ = n_.subscribe("imu", 1, &FTCalibNode::topicCallback_imu, this);
+		topicSub_ft_raw_ = nh_.subscribe("ft_raw", 1, &FTCalibNode::topicCallback_ft_raw, this);
+		topicSub_Accelerometer_ = nh_.subscribe("imu", 1, &FTCalibNode::topicCallback_imu, this);
 
 		m_pose_counter = 0;
 		m_ft_counter = 0;
@@ -100,24 +98,23 @@ public:
 
 	bool getROSParameters()
 	{
-
 		// Get the moveit group name
-		if(n_.hasParam("moveit_group_name"))
+		if(nh_.hasParam("moveit_group_name"))
 		{
-			n_.getParam("moveit_group_name", m_moveit_group_name);
+			nh_.getParam("moveit_group_name", m_moveit_group_name);
 		}
 
 		else
 		{
 			ROS_ERROR("No moveit_group_name parameter, shutting down node...");
-			n_.shutdown();
+			nh_.shutdown();
 			return false;
 		}
 
 		// Get the name of output calibration file
-		if(n_.hasParam("calib_file_name"))
+		if(nh_.hasParam("calib_file_name"))
 		{
-			n_.getParam("calib_file_name", m_calib_file_name);
+			nh_.getParam("calib_file_name", m_calib_file_name);
 		}
 
 		else
@@ -127,9 +124,9 @@ public:
 		}
 
         // Get the name of calibration file directory
-        if(n_.hasParam("calib_file_dir"))
+        if(nh_.hasParam("calib_file_dir"))
         {
-            n_.getParam("calib_file_dir", m_calib_file_dir);
+            nh_.getParam("calib_file_dir", m_calib_file_dir);
         }
 
         else
@@ -140,9 +137,9 @@ public:
 
 
         // Get the name of file to store the gravity and F/T measurements
-        if(n_.hasParam("meas_file_name"))
+        if(nh_.hasParam("meas_file_name"))
         {
-            n_.getParam("meas_file_name", m_meas_file_name);
+            nh_.getParam("meas_file_name", m_meas_file_name);
         }
 
         else
@@ -152,9 +149,9 @@ public:
         }
 
         // Get the name of directory to save gravity and force-torque measurements
-        if(n_.hasParam("meas_file_dir"))
+        if(nh_.hasParam("meas_file_dir"))
 		{
-            n_.getParam("meas_file_dir", m_meas_file_dir);
+            nh_.getParam("meas_file_dir", m_meas_file_dir);
 		}
 
 		else
@@ -163,27 +160,44 @@ public:
             m_meas_file_dir = std::string("~/.ros/ft_calib");
 		}
 
-		if(n_.hasParam("poses_frame_id"))
+		if(nh_.hasParam("ft_sensor_frame_id"))
 		{
-			n_.getParam("poses_frame_id", m_poses_frame_id);
+			nh_.getParam("ft_sensor_frame_id", m_ft_sensor_frame_id);
 		}
-
-        else
+		else
         {
-            ROS_ERROR("No poses_frame_id parameter, shutting down node ...");
-            n_.shutdown();
+            ROS_ERROR("No ft_sensor_frame_id parameter, shutting down node ...");
+            nh_.shutdown();
             return false;
         }
 
+		if(nh_.hasParam("poses_frame_id"))
+		{
+			nh_.getParam("poses_frame_id", m_poses_frame_id);
+		}
+        else
+        {
+            ROS_ERROR("No poses_frame_id parameter, shutting down node ...");
+            nh_.shutdown();
+            return false;
+        }
 
-        // whether the user wants to use random poses
-		// n_.param("random_poses", m_random_poses, false);
+		if (nh_.hasParam("cone_angle"))
+		{
+			nh_.getParam("cone_angle", m_cone_angle);
+		}
+		else
+		{
+			m_cone_angle = 0.5;
+			ROS_WARN("Missing cone_angle parameter, using default value of %f radians", m_cone_angle);
+		}
+
 		
 		// operation mode
-		n_.param("operation_mode", op_mode, MANUAL_POSITIONING);
+		nh_.param("operation_mode", op_mode, MANUAL_POSITIONING);
 
         // number of random poses
-        n_.param("number_random_poses", m_number_random_poses, 30);
+        nh_.param("number_poses", m_number_poses, 30);
 
 
         // initialize the file with gravity and F/T measurements
@@ -219,9 +233,10 @@ public:
         return true;
     }
     // connects to the move arm servers
-	void init()
+	void initMoveGroupInterface()
 	{
-		m_group = new moveit::planning_interface::MoveGroupInterface(m_moveit_group_name);
+		if(op_mode != MANUAL_POSITIONING)
+			m_group = new moveit::planning_interface::MoveGroupInterface(m_moveit_group_name);
 	}
 
 
@@ -233,12 +248,11 @@ public:
 		ss << m_pose_counter;
 		Eigen::Matrix<double, 6, 1> pose;
 
-		// either find poses from the parameter server
-		// poses should be in "pose%d" format (e.g. pose0, pose1, pose2 ...)
-		// and they should be float arrays of size 6
-		// if(!m_random_poses)
 		if(op_mode == PREDEFINED_POSES)
 		{
+			// find poses from the parameter server
+			// poses should be in "pose%d" format (e.g. pose0, pose1, pose2 ...)
+			// and they should be float arrays of size 6
 			ROS_INFO("PREDEFINED_POSE");
 			if(!getPose("pose"+ss.str(), pose))
 			{
@@ -264,11 +278,17 @@ public:
 
 			m_group->setPoseTarget(pose_stamped);
 
+			ROS_INFO("Executing pose %d", m_pose_counter);
+			ROS_INFO("EE goal position = (%f, %f, %f)", pose(0), pose(1), pose(2));
+			ROS_INFO("EE goal orientation = (%f, %f, %f, %f)", q.x(), q.y(), q.z(), q.w());
+
+			m_group->move();
 		}
 		else if(op_mode == RANDOM_POSES) // or execute random poses
 		{
+			// generate poses inside a cone, with a pre-defined angle with respect to its main axis (m_cone_angle)
 			ROS_INFO("RANDOM_POSE");
-			if(m_pose_counter<m_number_random_poses)
+			if(m_pose_counter < m_number_poses)
 			{
 				if(!getPose("pose_base", pose))
 				{
@@ -286,13 +306,26 @@ public:
 				tf::Quaternion q;
 				std::random_device rd;  //Will be used to obtain a seed for the random number engine
 				std::mt19937 gen(rd()); //Standard mersenne_twister_engine seeded with rd()
-				std::uniform_real_distribution<> dis(-PI/3, PI/3);
-				pose(3) = dis(gen);
-				dis = std::uniform_real_distribution<>(-PI, PI);
-				pose(4) = dis(gen);
-				pose(5) = 0;
+				std::uniform_real_distribution<> angle_dist(0, 2*M_PI), coord_dist(cos(m_cone_angle), 1), rot_dist(0, 2*M_PI);
+				tfScalar coord, phi, rot;
 
-				q.setRPY((double)pose(3), (double)pose(4), (double)pose(5));
+				coord = coord_dist(gen);
+				phi = angle_dist(gen);
+				rot = rot_dist(gen);
+
+				geometry_msgs::PoseStamped current_pose = m_group->getCurrentPose();
+				tf::Vector3 direction(coord, sqrt(1 - coord*coord)*cos(phi), sqrt(1 - coord*coord)*sin(phi)); // Direction we want to point to
+				tf::Vector3 base_direction(0, 0, 1); // Base
+				tf::Vector3 diff_v = base_direction.cross(direction);
+				tfScalar diff_rot = 1 + base_direction.dot(direction);
+				tf::Quaternion q_init(diff_v.x(), diff_v.y(), diff_v.z(), diff_rot);
+				tf::Quaternion q_post(0, 0, 1, rot);
+				q_post.normalize();
+				q_init.normalize();
+
+				q.setRotation(direction, 0);
+				q.normalize();
+				q = q_init*q*q_post;
 	
 				tf::quaternionTFToMsg(q, pose_.orientation);
 	
@@ -303,28 +336,39 @@ public:
 	
 				m_group->setPoseTarget(pose_stamped);
 
-				// m_group->setRandomTarget();
-				ROS_INFO("Executing pose %d",m_pose_counter);
+				ROS_INFO("Executing pose %d", m_pose_counter);
+				ROS_INFO("EE goal position = (%f, %f, %f)", pose(0), pose(1), pose(2));
+				ROS_INFO("EE goal orientation = (%f, %f, %f, %f)", q.x(), q.y(), q.z(), q.w());
+
+				m_group->move();
+			}
+			else
+			{	
+					ROS_INFO("Finished group %s random poses", m_group->getName().c_str());
+					m_finished = true;
+				
+			}
+		}
+		else
+		{
+			if(m_pose_counter < m_number_poses)
+			{
+				ROS_INFO("MANUAL_POSITIONING");
+				ROS_INFO("Pose %d", m_pose_counter);
+				ROS_INFO("Position the end effector in the desired pose and press ENTER to continue.");
+				while(ros::ok() && getchar()!='\n')
+				{ }
+				ROS_INFO("Pose captured. Please keep the end effector static until you're asked to reposition it again.");
 			}
 			else
 			{
-				ROS_INFO("Finished group %s random poses", m_group->getName().c_str());
+				ROS_INFO("Finished group %s manually set poses", m_group->getName().c_str());
 				m_finished = true;
-				return true;
 			}
 		}
-		// else
-		// {
-		// 	ROS_INFO("MANUAL_POSITIONING");
-		// 	ROS_INFO("Finished group %s manually set poses", m_group->getName().c_str());
-		// 	m_finished = true;
-		// 	return true;
-		// }
 
-		ROS_INFO("EE goal position = (%f, %f, %f)", pose(0), pose(1), pose(2));
-		ROS_INFO("EE goal orientation = (%f, %f, %f)", pose(3), pose(4), pose(5));
 		m_pose_counter++;
-		m_group->move();
+		
 		ROS_INFO("Finished executing pose %d", m_pose_counter-1);
 		return true;
 	}
@@ -334,9 +378,9 @@ public:
 	bool getPose(const std::string &pose_param_name, Eigen::Matrix<double, 6, 1> &pose)
 	{
 		XmlRpc::XmlRpcValue PoseXmlRpc;
-		if(n_.hasParam(pose_param_name))
+		if(nh_.hasParam(pose_param_name))
 		{
-			n_.getParam(pose_param_name, PoseXmlRpc);
+			nh_.getParam(pose_param_name, PoseXmlRpc);
 		}
 
 		else
@@ -385,10 +429,10 @@ public:
 			COM_pose[i+3] = 0.0;
 
 		// set the parameters in the parameter server
-		n_.setParam("/ft_calib/bias", bias);
-		n_.setParam("/ft_calib/gripper_mass", mass);
-		n_.setParam("/ft_calib/gripper_com_frame_id", m_ft_raw.header.frame_id.c_str());
-		n_.setParam("/ft_calib/gripper_com_pose", COM_pose);
+		nh_.setParam("/ft_calib/bias", bias);
+		nh_.setParam("/ft_calib/gripper_mass", mass);
+		nh_.setParam("/ft_calib/gripper_com_frame_id", m_ft_raw.header.frame_id.c_str());
+		nh_.setParam("/ft_calib/gripper_com_pose", COM_pose);
 
 		// dump the parameters to YAML file
 		std::string file = m_calib_file_dir + std::string("/") + m_calib_file_name;
@@ -430,6 +474,13 @@ public:
 	{
 		ROS_DEBUG("In ft sensorcallback");
 		m_ft_raw = *msg;
+
+		// check if msg has a frame id
+		if (m_ft_raw.header.frame_id.empty())
+		{
+			m_ft_raw.header.frame_id = m_ft_sensor_frame_id;
+		}
+
 		m_received_ft = true;
 	}
 
@@ -558,6 +609,9 @@ private:
 	bool m_received_ft;
 	bool m_received_imu;
 
+	// cone angle limits
+	double m_cone_angle;
+
 	// ft calib stuff
 	FTCalib *m_ft_calib;
 
@@ -591,52 +645,52 @@ private:
 	// frame id of the poses to be executed
 	std::string m_poses_frame_id;
 
-	// if the user wants to execute just random poses
-	// default: false
-	// bool m_random_poses;
+	// frame of the force torque measurements
+	std::string m_ft_sensor_frame_id;
 
+	// operation modes
 	const int PREDEFINED_POSES = 1;
 	const int RANDOM_POSES = 2;
 	const int MANUAL_POSITIONING = 3;
 
 	// operation mode choice. Either
-	int op_mode = MANUAL_POSITIONING;
+	int op_mode;
 
 	// number of random poses
 	// default: 30
-	int m_number_random_poses;
+	int m_number_poses;
 
 };
 
 int main(int argc, char **argv)
 {
-	ros::init (argc, argv, "ft_calib_node");
+	ros::init(argc, argv, "ft_calib_node");
 	ros::NodeHandle nh;
 
 	FTCalibNode ft_calib_node;
 	if(!ft_calib_node.getROSParameters())
 	{
-		ft_calib_node.n_.shutdown();
+		ft_calib_node.nh_.shutdown();
 		ROS_ERROR("Error getting ROS parameters");
 
 	}
-	ft_calib_node.init();
+	ft_calib_node.initMoveGroupInterface();
 
 	/// main loop
 	double loop_rate_;
-	ft_calib_node.n_.param("loop_rate", loop_rate_, 650.0);
+	ft_calib_node.nh_.param("loop_rate", loop_rate_, 650.0);
 	ros::Rate loop_rate(loop_rate_); // Hz
 
 	// waiting time after end of each pose to take F/T measurements
 	double wait_time;
-	ft_calib_node.n_.param("wait_time", wait_time, 4.0);
+	ft_calib_node.nh_.param("wait_time", wait_time, 4.0);
 
 	bool ret = false;
-	unsigned int n_measurements = 0;
+	unsigned int nh_measurements = 0;
 
 	ros::Time t_end_move_arm = ros::Time(0);
 
-	while (ft_calib_node.n_.ok() && !ft_calib_node.finished())
+	while (ft_calib_node.nh_.ok() && !ft_calib_node.finished())
 	{
 
 		// Move the arm, then calibrate sensor
@@ -650,13 +704,13 @@ int main(int argc, char **argv)
 		// average 100 measurements to calibrate the sensor in each position
 		else if ((ros::Time::now() - t_end_move_arm).toSec() > wait_time)
 		{
-			n_measurements++;
+			nh_measurements++;
 			ft_calib_node.averageFTMeas(); // average over 100 measurements;
 
-			if(n_measurements==100)
+			if(nh_measurements==100)
 			{
 				ret = false;
-				n_measurements = 0;
+				nh_measurements = 0;
 
 				ft_calib_node.addMeasurement(); // stacks up measurement matrices and FT measurementsa
 				double mass;
